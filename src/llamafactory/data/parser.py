@@ -15,7 +15,7 @@
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from huggingface_hub import hf_hub_download
 
@@ -127,11 +127,7 @@ def enhanced_get_dataset_list(dataset_names: Optional[list[str]], dataset_dir: s
         dataset_details = json.loads(dataset_names) if isinstance(dataset_names, str) else dataset_names
         if isinstance(dataset_details, list) and all(isinstance(detail, dict) for detail in dataset_details):
             dataset_names = [dataset_detail["name"] for dataset_detail in dataset_details]
-            logger.info(f"Parsed dataset names from details: {dataset_names}")
-        else:
-            logger.info(f"Using dataset names as provided: {dataset_names}")
     except (json.JSONDecodeError, TypeError):
-        logger.info(f"Using dataset names as provided: {dataset_names}")
         dataset_details = None
     
     if dataset_names is None:
