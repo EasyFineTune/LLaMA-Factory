@@ -23,7 +23,7 @@ from ..extras.constants import FILEEXT2TYPE
 from ..extras.misc import check_version, has_tokenized_data
 from .converter import align_dataset
 from .data_utils import get_dataset_module, merge_dataset, read_cloud_json, split_dataset
-from .parser import get_dataset_list, enhanced_get_dataset_list
+from .parser import get_dataset_list
 from .processor import (
     FeedbackDatasetProcessor,
     PackedSupervisedDatasetProcessor,
@@ -161,29 +161,6 @@ def _load_single_dataset(
 
     return align_dataset(dataset, dataset_attr, data_args, training_args)
 
-def _enhanced_get_merged_dataset(
-    dataset_names: Optional[list[str]],
-    model_args: "ModelArguments",
-    data_args: "DataArguments",
-    training_args: "Seq2SeqTrainingArguments",
-    stage: Literal["pt", "sft", "rm", "ppo", "kto"],
-    return_dict: bool = False,
-) -> Optional[Union["Dataset", "IterableDataset", dict[str, "Dataset"]]]:
-    r"""Return the merged datasets in the standard format."""
-    if dataset_names is None:
-        return None
-
-    datasets = {}
-    for dataset_name, dataset_attr in zip(dataset_names, enhanced_get_dataset_list(dataset_names, data_args.dataset_dir)):
-        if (stage == "rm" and dataset_attr.ranking is False) or (stage != "rm" and dataset_attr.ranking is True):
-            raise ValueError("The dataset is not applicable in the current training stage.")
-
-        datasets[dataset_name] = _load_single_dataset(dataset_attr, model_args, data_args, training_args)
-
-    if return_dict:
-        return datasets
-    else:
-        return merge_dataset(list(datasets.values()), data_args, seed=training_args.seed)
 
 def _get_merged_dataset(
     dataset_names: Optional[list[str]],
@@ -295,66 +272,6 @@ def _get_preprocessed_dataset(
                 raise RuntimeError("Cannot find valid samples, check `data/README.md` for the data format.")
 
     return dataset
-
-def enhanced_get_dataset(
-    template: "Template",
-    model_args: "ModelArguments",
-    data_args: "DataArguments",
-    training_args: "Seq2SeqTrainingArguments",
-    stage: Literal["pt", "sft", "rm", "ppo", "kto"],
-    tokenizer: "PreTrainedTokenizer",
-    processor: Optional["ProcessorMixin"] = None,
-) -> "DatasetModule":
-    r"""Get the train dataset and optionally gets the evaluation dataset."""
-    # Load tokenized dataset if path exists
-    if data_args.tokenized_path is not None:
-        if has_tokenized_data(data_args.tokenized_path):
-            logger.warning_rank0("Loading dataset from disk will ignore other data arguments.")
-            tokenized_data = load_from_disk(data_args.tokenized_path)
-            dataset_module = get_dataset_module(tokenized_data)
-            if data_args.streaming:
-                dataset_module["train_dataset"] = dataset_module["train_dataset"].to_iterable_dataset()
-
-            logger.info_rank0(f"Loaded tokenized dataset from {data_args.tokenized_path}.")
-            return dataset_module
-
-        if data_args.streaming:
-            raise ValueError("Turn off `streaming` when saving dataset to disk.")
-
-    # Load and preprocess dataset
-    with training_args.main_process_first(desc="load dataset", local=(not data_args.data_shared_file_system)):
-        dataset = _enhanced_get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage)
-        eval_dataset = _enhanced_get_merged_dataset(
-            data_args.eval_dataset,
-            model_args,
-            data_args,
-            training_args,
-            stage,
-            return_dict=data_args.eval_on_each_dataset,
-        )
-
-    with training_args.main_process_first(desc="pre-process dataset", local=(not data_args.data_shared_file_system)):
-        dataset = _get_preprocessed_dataset(
-            dataset, data_args, training_args, stage, template, tokenizer, processor, is_eval=False
-        )
-        if isinstance(eval_dataset, dict):
-            for eval_name, eval_data in eval_dataset.items():
-                eval_dataset[eval_name] = _get_preprocessed_dataset(
-                    eval_data, data_args, training_args, stage, template, tokenizer, processor, is_eval=True
-                )
-        else:
-            eval_dataset = _get_preprocessed_dataset(
-                eval_dataset, data_args, training_args, stage, template, tokenizer, processor, is_eval=True
-            )
-
-        dataset_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.seed)
-        if data_args.tokenized_path is not None:  # save tokenized dataset to disk
-            if training_args.should_save:
-                dataset_dict.save_to_disk(data_args.tokenized_path)
-                logger.info_rank0(f"Tokenized dataset is saved at {data_args.tokenized_path}.")
-                logger.info_rank0(f"Please launch the training with `tokenized_path: {data_args.tokenized_path}`.")
-
-        return get_dataset_module(dataset_dict)
 
 
 def get_dataset(
